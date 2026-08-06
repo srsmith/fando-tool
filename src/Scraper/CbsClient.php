@@ -39,30 +39,19 @@ final class CbsClient
 
     public function login(): void
     {
-        $loginPageHtml = $this->request('GET', $this->loginUrl);
+        $diagnostics = $this->diagnoseLogin();
 
-        $form = $this->extractLoginForm($loginPageHtml, $this->loginUrl);
-
-        $fields = $form['fields'];
-        $userField = $this->usernameField ?? $this->guessField($fields, ['user', 'email', 'login']);
-        $passField = $this->passwordField ?? $this->guessField($fields, ['pass']);
-
-        if ($userField === null || $passField === null) {
+        if (isset($diagnostics['error'])) {
             throw new \RuntimeException(
-                'Could not auto-detect CBS login form fields. Inspect the captured '
-                . 'login page HTML and set usernameField/passwordField explicitly.'
+                $diagnostics['error'] . ' Inspect the captured login page HTML (see the admin diagnostics '
+                . 'page, or scripts/capture_pages.php) and set usernameField/passwordField explicitly if needed.'
             );
         }
-
-        $fields[$userField] = $this->username;
-        $fields[$passField] = $this->password;
-
-        $response = $this->request('POST', $form['action'], $fields);
 
         // CBS should redirect us on success; a page that still contains a
         // password field means login failed (wrong creds, or our field
         // guesses were wrong).
-        if (stripos($response, 'type="password"') !== false) {
+        if ($diagnostics['response_still_has_password_field']) {
             throw new \RuntimeException('CBS login appears to have failed -- response still shows a login form.');
         }
 
@@ -76,6 +65,57 @@ final class CbsClient
         }
 
         return $this->request('GET', $url);
+    }
+
+    /**
+     * Same steps as login(), but returns what it saw/sent/got back instead of
+     * throwing, so a real failure can be diagnosed without network access to
+     * cbssports.com from wherever this code is being developed.
+     *
+     * @return array{
+     *   login_url: string,
+     *   form_action: string,
+     *   detected_fields: string[],
+     *   guessed_username_field: ?string,
+     *   guessed_password_field: ?string,
+     *   login_page_snippet: string,
+     *   response_snippet?: string,
+     *   response_still_has_password_field?: bool,
+     *   error?: string,
+     * }
+     */
+    public function diagnoseLogin(): array
+    {
+        $loginPageHtml = $this->request('GET', $this->loginUrl);
+        $form = $this->extractLoginForm($loginPageHtml, $this->loginUrl);
+
+        $fields = $form['fields'];
+        $userField = $this->usernameField ?? $this->guessField($fields, ['user', 'email', 'login']);
+        $passField = $this->passwordField ?? $this->guessField($fields, ['pass']);
+
+        $diagnostics = [
+            'login_url' => $this->loginUrl,
+            'form_action' => $form['action'],
+            'detected_fields' => array_keys($fields),
+            'guessed_username_field' => $userField,
+            'guessed_password_field' => $passField,
+            'login_page_snippet' => substr($loginPageHtml, 0, 4000),
+        ];
+
+        if ($userField === null || $passField === null) {
+            $diagnostics['error'] = 'Could not auto-detect username/password fields.';
+            return $diagnostics;
+        }
+
+        $fields[$userField] = $this->username;
+        $fields[$passField] = $this->password;
+
+        $response = $this->request('POST', $form['action'], $fields);
+
+        $diagnostics['response_still_has_password_field'] = stripos($response, 'type="password"') !== false;
+        $diagnostics['response_snippet'] = substr($response, 0, 4000);
+
+        return $diagnostics;
     }
 
     /**
