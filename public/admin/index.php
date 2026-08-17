@@ -55,6 +55,7 @@ $recentScrapes = $logStmt->fetchAll();
 <form method="post" action="scrape.php">
     <button type="submit">Refresh data from CBS now</button>
 </form>
+<p><a href="debug_login.php">Diagnose CBS login</a> (shows the login form CBS actually returns, and what we tried)</p>
 
 <h3>Recent scrape log</h3>
 <table border="1" cellpadding="4">
