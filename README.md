@@ -17,8 +17,11 @@ mysql < sql/schema.sql
 ```
 
 Then, from the admin screen (`public/admin/`, gated by `admin_secret` in
-config), set the CBS login and trigger a scrape. Recurring refreshes can be
-run via `php scripts/scrape.php` on a cron.
+config), paste a CBS session cookie (see README-scraper.md -- CBS's login is
+behind reCAPTCHA, so this is copied from a real logged-in browser rather
+than automated) and trigger a scrape. Recurring refreshes can be run via
+`php scripts/scrape.php` on a cron, though the pasted cookie will still
+need periodic manual refreshing once it expires.
 
 ### Status
 

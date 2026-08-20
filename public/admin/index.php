@@ -15,13 +15,12 @@ $credentials = new CredentialsRepository($pdo, $config['credentials_encryption_k
 $message = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_credentials') {
-    $username = trim((string) ($_POST['cbs_username'] ?? ''));
-    $password = (string) ($_POST['cbs_password'] ?? '');
-    if ($username !== '' && $password !== '') {
-        $credentials->save($username, $password);
-        $message = 'CBS credentials saved.';
+    $cookie = trim((string) ($_POST['cbs_session_cookie'] ?? ''));
+    if ($cookie !== '') {
+        $credentials->save($cookie);
+        $message = 'CBS session cookie saved.';
     } else {
-        $message = 'Both fields are required.';
+        $message = 'Paste a session cookie value first.';
     }
 }
 
@@ -42,12 +41,23 @@ $recentScrapes = $logStmt->fetchAll();
 <?php if ($message): ?><p><strong><?= htmlspecialchars($message) ?></strong></p><?php endif; ?>
 <?php if ($flash): ?><p><strong><?= htmlspecialchars($flash) ?></strong></p><?php endif; ?>
 
-<h2>CBS Credentials</h2>
-<p>Current username: <?= $current ? htmlspecialchars($current['username']) : '<em>not set</em>' ?></p>
+<h2>CBS Session Cookie</h2>
+<p>
+    CBS's login is behind reCAPTCHA and can't be automated. Instead: log into
+    CBS Sports normally in your own browser, open DevTools &rarr; Network tab,
+    click any request to a cbssports.com page, and copy the full
+    <code>Cookie</code> request header value. Paste it below. It'll need
+    refreshing here whenever it expires.
+</p>
+<p>
+    Currently saved:
+    <?= $current ? 'yes (last updated ' . htmlspecialchars($current['updated_at']) . ')' : '<em>not set</em>' ?>
+</p>
 <form method="post">
     <input type="hidden" name="action" value="save_credentials">
-    <label>Username <input type="text" name="cbs_username" autocomplete="off"></label><br>
-    <label>Password <input type="password" name="cbs_password" autocomplete="off"></label><br>
+    <label>Session cookie<br>
+        <textarea name="cbs_session_cookie" rows="4" cols="80" autocomplete="off"></textarea>
+    </label><br>
     <button type="submit">Save</button>
 </form>
 
@@ -55,7 +65,7 @@ $recentScrapes = $logStmt->fetchAll();
 <form method="post" action="scrape.php">
     <button type="submit">Refresh data from CBS now</button>
 </form>
-<p><a href="debug_login.php">Diagnose CBS login</a> (shows the login form CBS actually returns, and what we tried)</p>
+<p><a href="debug_login.php">Test CBS session cookie</a> (fetches the roster page and shows whether it looks logged in)</p>
 
 <h3>Recent scrape log</h3>
 <table border="1" cellpadding="4">

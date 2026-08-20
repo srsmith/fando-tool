@@ -5,7 +5,8 @@ declare(strict_types=1);
 namespace Fando\Keeper\Db;
 
 /**
- * Stores the single CBS login (username/password) encrypted at rest with
+ * Stores the CBS session cookie (pasted by a human after logging into CBS
+ * normally in their own browser -- see CbsClient) encrypted at rest with
  * libsodium secretbox. Only the admin screen touches this.
  */
 final class CredentialsRepository
@@ -18,44 +19,42 @@ final class CredentialsRepository
     ) {
     }
 
-    public function save(string $username, string $password): void
+    public function save(string $sessionCookie): void
     {
         $key = $this->key();
         $nonce = random_bytes(self::NONCE_BYTES);
-        $ciphertext = sodium_crypto_secretbox($password, $nonce, $key);
+        $ciphertext = sodium_crypto_secretbox($sessionCookie, $nonce, $key);
 
         $stmt = $this->pdo->prepare(
-            'INSERT INTO credentials (id, cbs_username, cbs_password_encrypted, updated_at)
-             VALUES (1, :username, :encrypted, NOW())
-             ON DUPLICATE KEY UPDATE cbs_username = :username2, cbs_password_encrypted = :encrypted2, updated_at = NOW()'
+            'INSERT INTO credentials (id, cbs_session_cookie_encrypted, updated_at)
+             VALUES (1, :encrypted, NOW())
+             ON DUPLICATE KEY UPDATE cbs_session_cookie_encrypted = :encrypted2, updated_at = NOW()'
         );
         $stmt->execute([
-            'username' => $username,
             'encrypted' => $nonce . $ciphertext,
-            'username2' => $username,
             'encrypted2' => $nonce . $ciphertext,
         ]);
     }
 
-    /** @return array{username: string, password: string}|null */
+    /** @return array{cookie: string, updated_at: string}|null */
     public function load(): ?array
     {
-        $stmt = $this->pdo->query('SELECT cbs_username, cbs_password_encrypted FROM credentials WHERE id = 1');
+        $stmt = $this->pdo->query('SELECT cbs_session_cookie_encrypted, updated_at FROM credentials WHERE id = 1');
         $row = $stmt->fetch();
         if ($row === false) {
             return null;
         }
 
-        $blob = $row['cbs_password_encrypted'];
+        $blob = $row['cbs_session_cookie_encrypted'];
         $nonce = substr($blob, 0, self::NONCE_BYTES);
         $ciphertext = substr($blob, self::NONCE_BYTES);
-        $password = sodium_crypto_secretbox_open($ciphertext, $nonce, $this->key());
+        $cookie = sodium_crypto_secretbox_open($ciphertext, $nonce, $this->key());
 
-        if ($password === false) {
-            throw new \RuntimeException('Could not decrypt stored CBS credentials -- wrong encryption key?');
+        if ($cookie === false) {
+            throw new \RuntimeException('Could not decrypt stored CBS session cookie -- wrong encryption key?');
         }
 
-        return ['username' => $row['cbs_username'], 'password' => $password];
+        return ['cookie' => $cookie, 'updated_at' => $row['updated_at']];
     }
 
     private function key(): string

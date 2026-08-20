@@ -7,202 +7,51 @@ namespace Fando\Keeper\Scraper;
 /**
  * Authenticated HTTP client for CBS Sportsline.
  *
- * Login is done generically: fetch the login page, find its <form>, submit
- * every hidden field unchanged (to preserve CSRF tokens etc.) plus the
- * username/password into whatever inputs look like the credential fields.
- * This avoids hardcoding CBS's exact field names, which we can't verify from
- * this environment (cbssports.com is blocked by the sandbox's egress
- * policy -- see README-scraper.md). If CBS's form doesn't auto-detect
- * cleanly, override the field names via $usernameField/$passwordField.
+ * CBS's login page is a JS single-page app protected by reCAPTCHA -- there's
+ * no way for a plain HTTP client to complete that login itself (nor should
+ * it try to defeat the CAPTCHA). Instead, a human logs into CBS normally in
+ * their own browser and pastes the resulting session cookie into the admin
+ * screen; this client just replays that cookie on every request. The cookie
+ * will eventually expire and need refreshing the same way.
  */
 final class CbsClient
 {
-    private string $cookieJar;
-    private bool $loggedIn = false;
-
-    public function __construct(
-        private readonly string $loginUrl,
-        private readonly string $username,
-        private readonly string $password,
-        private readonly ?string $usernameField = null,
-        private readonly ?string $passwordField = null,
-    ) {
-        $this->cookieJar = tempnam(sys_get_temp_dir(), 'cbs_cookies_');
-    }
-
-    public function __destruct()
+    public function __construct(private readonly string $sessionCookie)
     {
-        if (is_file($this->cookieJar)) {
-            unlink($this->cookieJar);
-        }
-    }
-
-    public function login(): void
-    {
-        $diagnostics = $this->diagnoseLogin();
-
-        if (isset($diagnostics['error'])) {
-            throw new \RuntimeException(
-                $diagnostics['error'] . ' Inspect the captured login page HTML (see the admin diagnostics '
-                . 'page, or scripts/capture_pages.php) and set usernameField/passwordField explicitly if needed.'
-            );
-        }
-
-        // CBS should redirect us on success; a page that still contains a
-        // password field means login failed (wrong creds, or our field
-        // guesses were wrong).
-        if ($diagnostics['response_still_has_password_field']) {
-            throw new \RuntimeException('CBS login appears to have failed -- response still shows a login form.');
-        }
-
-        $this->loggedIn = true;
     }
 
     public function fetch(string $url): string
     {
-        if (!$this->loggedIn) {
-            $this->login();
-        }
+        [$body, $effectiveUrl] = $this->request($url);
 
-        return $this->request('GET', $url);
-    }
-
-    /**
-     * Same steps as login(), but returns what it saw/sent/got back instead of
-     * throwing, so a real failure can be diagnosed without network access to
-     * cbssports.com from wherever this code is being developed.
-     *
-     * @return array{
-     *   login_url: string,
-     *   form_action: string,
-     *   detected_fields: string[],
-     *   guessed_username_field: ?string,
-     *   guessed_password_field: ?string,
-     *   login_page_snippet: string,
-     *   response_snippet?: string,
-     *   response_still_has_password_field?: bool,
-     *   error?: string,
-     * }
-     */
-    public function diagnoseLogin(): array
-    {
-        $loginPageHtml = $this->request('GET', $this->loginUrl);
-        $form = $this->extractLoginForm($loginPageHtml, $this->loginUrl);
-
-        $fields = $form['fields'];
-        $userField = $this->usernameField ?? $this->guessField($fields, ['user', 'email', 'login']);
-        $passField = $this->passwordField ?? $this->guessField($fields, ['pass']);
-
-        $diagnostics = [
-            'login_url' => $this->loginUrl,
-            'form_action' => $form['action'],
-            'detected_fields' => array_keys($fields),
-            'guessed_username_field' => $userField,
-            'guessed_password_field' => $passField,
-            'login_page_snippet' => substr($loginPageHtml, 0, 4000),
-        ];
-
-        if ($userField === null || $passField === null) {
-            $diagnostics['error'] = 'Could not auto-detect username/password fields.';
-            return $diagnostics;
-        }
-
-        $fields[$userField] = $this->username;
-        $fields[$passField] = $this->password;
-
-        $response = $this->request('POST', $form['action'], $fields);
-
-        $diagnostics['response_still_has_password_field'] = stripos($response, 'type="password"') !== false;
-        $diagnostics['response_snippet'] = substr($response, 0, 4000);
-
-        return $diagnostics;
-    }
-
-    /**
-     * @return array{action: string, fields: array<string,string>}
-     */
-    private function extractLoginForm(string $html, string $pageUrl): array
-    {
-        $doc = new \DOMDocument();
-        libxml_use_internal_errors(true);
-        $doc->loadHTML($html);
-        libxml_use_internal_errors(false);
-
-        $xpath = new \DOMXPath($doc);
-        $forms = $xpath->query('//form[.//input[@type="password"]]');
-
-        if ($forms === false || $forms->length === 0) {
+        if ($this->looksLoggedOut($body, $effectiveUrl)) {
             throw new \RuntimeException(
-                'No login form (a <form> containing a password input) found on the login page. '
-                . 'Capture the real page HTML with scripts/capture_pages.php and update CbsClient.'
+                "CBS session cookie appears to be expired or invalid (landed on {$effectiveUrl}). "
+                . 'Log into CBS in your browser again and paste a fresh session cookie on the admin screen.'
             );
         }
 
-        /** @var \DOMElement $form */
-        $form = $forms->item(0);
-        $actionAttr = $form->getAttribute('action');
-        $action = $actionAttr === '' ? $pageUrl : $this->resolveUrl($pageUrl, $actionAttr);
-
-        $fields = [];
-        foreach ($xpath->query('.//input', $form) as $input) {
-            /** @var \DOMElement $input */
-            $type = strtolower($input->getAttribute('type') ?: 'text');
-            $name = $input->getAttribute('name');
-            if ($name === '' || $type === 'submit' || $type === 'button') {
-                continue;
-            }
-            $fields[$name] = $input->getAttribute('value');
-        }
-
-        return ['action' => $action, 'fields' => $fields];
+        return $body;
     }
 
-    /** @param array<string,string> $fields */
-    private function guessField(array $fields, array $needles): ?string
+    private function looksLoggedOut(string $html, string $effectiveUrl): bool
     {
-        foreach (array_keys($fields) as $name) {
-            foreach ($needles as $needle) {
-                if (stripos($name, $needle) !== false) {
-                    return $name;
-                }
-            }
-        }
-        return null;
+        return stripos($effectiveUrl, 'login') !== false
+            || stripos($html, 'type="password"') !== false;
     }
 
-    private function resolveUrl(string $baseUrl, string $maybeRelative): string
-    {
-        if (parse_url($maybeRelative, PHP_URL_SCHEME) !== null) {
-            return $maybeRelative;
-        }
-        $base = parse_url($baseUrl);
-        $scheme = $base['scheme'] ?? 'https';
-        $host = $base['host'] ?? '';
-        if (str_starts_with($maybeRelative, '/')) {
-            return "{$scheme}://{$host}{$maybeRelative}";
-        }
-        $basePath = rtrim(dirname($base['path'] ?? '/'), '/');
-        return "{$scheme}://{$host}{$basePath}/{$maybeRelative}";
-    }
-
-    /** @param array<string,string>|null $postFields */
-    private function request(string $method, string $url, ?array $postFields = null): string
+    /** @return array{0: string, 1: string} [body, effective URL after redirects] */
+    private function request(string $url): array
     {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_FOLLOWLOCATION => true,
             CURLOPT_MAXREDIRS => 5,
-            CURLOPT_COOKIEJAR => $this->cookieJar,
-            CURLOPT_COOKIEFILE => $this->cookieJar,
+            CURLOPT_COOKIE => $this->sessionCookie,
             CURLOPT_USERAGENT => 'Mozilla/5.0 (compatible; FandoKeeperTool/1.0)',
             CURLOPT_TIMEOUT => 30,
         ]);
-
-        if ($method === 'POST') {
-            curl_setopt($ch, CURLOPT_POST, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($postFields ?? []));
-        }
 
         $body = curl_exec($ch);
         if ($body === false) {
@@ -212,12 +61,13 @@ final class CbsClient
         }
 
         $status = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $effectiveUrl = (string) curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
         curl_close($ch);
 
         if ($status >= 400) {
             throw new \RuntimeException("CBS request to {$url} returned HTTP {$status}");
         }
 
-        return $body;
+        return [$body, $effectiveUrl];
     }
 }

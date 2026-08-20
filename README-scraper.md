@@ -7,21 +7,22 @@ HTML shaped like what CBS is expected to produce, but the fixtures are a
 best guess, not a capture. Before relying on this in production, validate
 it against the real site:
 
-1. Copy `config/config.example.php` to `config/config.php` and fill in the
-   `cbs.login_url` (confirm the actual CBS Sportsline login page URL --
-   `https://www.cbssports.com/login/` in the example is a placeholder) plus
+1. Copy `config/config.example.php` to `config/config.php` and fill in
    DB/admin secrets.
-2. From an environment that can actually reach cbssports.com (i.e. not this
+2. CBS's login page is a JS single-page app behind reCAPTCHA -- there's no
+   way to automate that login, and this tool doesn't try. Instead: log into
+   CBS Sports normally in a real browser, open DevTools -> Network tab,
+   grab the full `Cookie` request header value from any request to a
+   cbssports.com page, and paste it into the admin screen (or use it below).
+   It'll expire eventually and need refreshing the same way.
+3. From an environment that can actually reach cbssports.com (i.e. not this
    sandbox -- your own machine or the hosting server), run:
    ```
-   CBS_USERNAME=... CBS_PASSWORD=... php scripts/capture_pages.php
+   CBS_SESSION_COOKIE='...' php scripts/capture_pages.php
    ```
-   This logs in and saves the real roster and draft-results pages under
-   `captures/` (gitignored).
-3. Check `CbsClient::login()` worked. If it throws "could not auto-detect
-   login form fields," open the saved login page HTML, find the actual
-   `name=` attributes on the username/password inputs, and set
-   `username_field`/`password_field` in `config.php`.
+   This saves the real roster and draft-results pages under `captures/`
+   (gitignored). If it throws "session cookie appears to be expired or
+   invalid," grab a fresh cookie value and try again.
 4. Compare the captured `roster.html` / `draft_results.html` against what
    `RosterScraper`/`DraftResultsScraper` expect:
    - `RosterScraper` looks for a `<table>` with a header row containing a

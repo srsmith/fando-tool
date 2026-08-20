@@ -21,16 +21,10 @@ final class ScrapeRunner
     {
         $creds = $this->credentials->load();
         if ($creds === null) {
-            throw new \RuntimeException('No CBS credentials saved yet -- set them on the admin screen first.');
+            throw new \RuntimeException('No CBS session cookie saved yet -- paste one on the admin screen first.');
         }
 
-        $client = new CbsClient(
-            loginUrl: $this->cbsConfig['login_url'],
-            username: $creds['username'],
-            password: $creds['password'],
-            usernameField: $this->cbsConfig['username_field'],
-            passwordField: $this->cbsConfig['password_field'],
-        );
+        $client = new CbsClient($creds['cookie']);
 
         $seasonId = $this->currentSeasonId();
         $importer = new ScrapeImportService($this->pdo);

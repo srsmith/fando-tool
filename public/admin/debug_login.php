@@ -14,22 +14,17 @@ $pdo = Database::connect($config['db']);
 $credentials = new CredentialsRepository($pdo, $config['credentials_encryption_key']);
 
 $creds = $credentials->load();
-$diagnostics = null;
+$snippet = null;
 $error = null;
 
 if ($creds === null) {
-    $error = 'No CBS credentials saved yet -- set them on the admin screen first.';
+    $error = 'No CBS session cookie saved yet -- paste one on the admin screen first.';
 } else {
-    $client = new CbsClient(
-        loginUrl: $config['cbs']['login_url'],
-        username: $creds['username'],
-        password: $creds['password'],
-        usernameField: $config['cbs']['username_field'],
-        passwordField: $config['cbs']['password_field'],
-    );
+    $client = new CbsClient($creds['cookie']);
 
     try {
-        $diagnostics = $client->diagnoseLogin();
+        $html = $client->fetch($config['cbs']['roster_url']);
+        $snippet = substr($html, 0, 4000);
     } catch (\Throwable $e) {
         $error = $e->getMessage();
     }
@@ -37,40 +32,20 @@ if ($creds === null) {
 ?>
 <!doctype html>
 <html>
-<head><title>CBS Login Diagnostics</title></head>
+<head><title>CBS Session Test</title></head>
 <body>
-<h1>CBS Login Diagnostics</h1>
+<h1>CBS Session Test</h1>
 <p><a href="index.php">&larr; back</a></p>
 
 <?php if ($error): ?>
     <p style="color:red;"><strong><?= htmlspecialchars($error) ?></strong></p>
 <?php endif; ?>
 
-<?php if ($diagnostics): ?>
-    <h2>What we requested</h2>
-    <p>Login URL: <code><?= htmlspecialchars($diagnostics['login_url']) ?></code></p>
-    <p>Detected form action: <code><?= htmlspecialchars($diagnostics['form_action']) ?></code></p>
-    <p>All input field names found on the login form:
-        <code><?= htmlspecialchars(implode(', ', $diagnostics['detected_fields'])) ?></code>
-    </p>
-    <p>Guessed username field: <strong><?= htmlspecialchars($diagnostics['guessed_username_field'] ?? '(none found)') ?></strong></p>
-    <p>Guessed password field: <strong><?= htmlspecialchars($diagnostics['guessed_password_field'] ?? '(none found)') ?></strong></p>
-
-    <?php if (isset($diagnostics['response_still_has_password_field'])): ?>
-        <h2>Result</h2>
-        <p>
-            Response still contains a password field (i.e. login looked like it failed):
-            <strong><?= $diagnostics['response_still_has_password_field'] ? 'YES' : 'no' ?></strong>
-        </p>
-    <?php endif; ?>
-
-    <h2>Login page HTML (first 4000 chars)</h2>
-    <pre style="white-space: pre-wrap; border: 1px solid #ccc; padding: 8px; max-height: 400px; overflow: auto;"><?= htmlspecialchars($diagnostics['login_page_snippet']) ?></pre>
-
-    <?php if (isset($diagnostics['response_snippet'])): ?>
-        <h2>Response after submitting login (first 4000 chars)</h2>
-        <pre style="white-space: pre-wrap; border: 1px solid #ccc; padding: 8px; max-height: 400px; overflow: auto;"><?= htmlspecialchars($diagnostics['response_snippet']) ?></pre>
-    <?php endif; ?>
+<?php if ($snippet !== null): ?>
+    <p style="color:green;"><strong>Fetched the roster page without being bounced to a login page.</strong>
+        Doesn't guarantee the table parser will work, but the session cookie is good.</p>
+    <h2>Roster page HTML (first 4000 chars)</h2>
+    <pre style="white-space: pre-wrap; border: 1px solid #ccc; padding: 8px; max-height: 400px; overflow: auto;"><?= htmlspecialchars($snippet) ?></pre>
 <?php endif; ?>
 
 </body>

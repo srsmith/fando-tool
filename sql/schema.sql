@@ -79,11 +79,13 @@ CREATE TABLE IF NOT EXISTS scrape_log (
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Single-row table; CBS login credentials, encrypted at rest. Admin-only read/write.
+-- Single-row table; the CBS session cookie a human copies from their own
+-- logged-in browser (see CbsClient/README-scraper.md -- CBS's login is
+-- behind reCAPTCHA and can't be automated), encrypted at rest.
+-- Admin-only read/write.
 CREATE TABLE IF NOT EXISTS credentials (
     id TINYINT UNSIGNED NOT NULL,
-    cbs_username VARCHAR(255) NOT NULL,
-    cbs_password_encrypted VARBINARY(512) NOT NULL,
+    cbs_session_cookie_encrypted VARBINARY(4096) NOT NULL,
     updated_at DATETIME NOT NULL,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
